@@ -1129,12 +1129,10 @@
     "@babel/plugin-transform-modules-commonjs" "^7.29.7"
     "@babel/plugin-transform-typescript" "^7.29.7"
 
-"@babel/runtime@7.26.10":
-  version "7.26.10"
-  resolved "https://registry.yarnpkg.com/@babel/runtime/-/runtime-7.26.10.tgz#a07b4d8fa27af131a633d7b3524db803eb4764c2"
-  integrity sha512-2WJMeRQPHKSPemqk/awGrAiuFfzBmOIPXKizAsVhWH9YJqLZ0H+HS4c8loHGgW6utJ3E/ejXQUsiGaQy2NZ9Fw==
-  dependencies:
-    regenerator-runtime "^0.14.0"
+"@babel/runtime@8.0.7":
+  version "8.0.7"
+  resolved "https://registry.yarnpkg.com/@babel/runtime/-/runtime-8.0.7.tgz#4f4d0371d27c93c269b57dba49b8427027ddd25e"
+  integrity sha512-k0hagDDq/6w4v+0Sp4wFvIz/yswH5O7Va6aRTnD7N62Tnborp4X+YB+H3XUcWVSR4aE47WPEXiIIZchBs0GmYg==
 
 "@babel/runtime@^7.25.0":
   version "7.27.0"
