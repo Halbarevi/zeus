@@ -1,0 +1,203 @@
+jest.mock('mobx-react', () => ({
+    inject: () => (component: any) => component,
+    observer: (component: any) => component
+}));
+jest.mock('../stores/Stores');
+jest.mock('../utils/LocaleUtils');
+jest.mock('react-native-blob-util', () => ({}));
+jest.mock('../utils/BackendUtils', () => ({
+    supportsLightningSends: () => true,
+    supportsMPP: () => false,
+    supportsAMP: () => false,
+    supportsCustomFeeLimit: () => false,
+    supportsHopPicking: () => false
+}));
+jest.mock('../utils/DonationUtils', () => ({
+    calculateDonationAmount: () => 0,
+    findDonationPercentageIndex: () => 0
+}));
+jest.mock('../utils/LinkingUtils', () => ({}));
+jest.mock('../utils/GraphSyncUtils', () => ({
+    clearPendingPaymentData: jest.fn()
+}));
+jest.mock('../components/AmountInput', () => 'AmountInput');
+jest.mock('../components/Amount', () => 'Amount');
+jest.mock('../components/Button', () => {
+    const { Pressable, Text } = require('react-native');
+    return ({ title, onPress, disabled }: any) => (
+        <Pressable role="button" onPress={onPress} disabled={disabled}>
+            <Text>{title}</Text>
+        </Pressable>
+    );
+});
+jest.mock('../components/SwipeButton', () => 'SwipeButton');
+jest.mock('../components/Conversion', () => 'Conversion');
+jest.mock('../components/FeeLimit', () => 'FeeLimit');
+jest.mock('../components/Accordion', () => 'Accordion');
+jest.mock('../components/Header', () => 'Header');
+jest.mock('../components/HopPicker', () => 'HopPicker');
+jest.mock('../components/KeyValue', () => 'KeyValue');
+jest.mock('../components/LoadingIndicator', () => 'LoadingIndicator');
+jest.mock('../components/Screen', () => {
+    const { View } = require('react-native');
+    return ({ children }: any) => <View>{children}</View>;
+});
+jest.mock('../components/Switch', () => 'Switch');
+jest.mock('../components/Text', () => {
+    const { Text } = require('react-native');
+    return ({ children }: any) => <Text>{children}</Text>;
+});
+jest.mock('../components/TextInput', () => 'TextInput');
+jest.mock('../components/layout/Row', () => ({ Row: 'Row' }));
+jest.mock('../components/SuccessErrorMessage', () => ({
+    ErrorMessage: 'ErrorMessage',
+    WarningMessage: 'WarningMessage'
+}));
+jest.mock('@rneui/themed', () => ({ ButtonGroup: 'ButtonGroup' }));
+jest.mock('../utils/SleepUtils', () => ({
+    // yield to the macrotask queue so the polling loop can't starve the test
+    sleep: jest.fn(() => new Promise((resolve) => setImmediate(resolve)))
+}));
+
+import * as React from 'react';
+import { act, render, screen } from '@testing-library/react-native';
+import PaymentRequest from './PaymentRequest';
+
+const PAY = 'views.PaymentRequest.payInvoice';
+const GETTING_READY = 'views.PaymentRequest.lndGettingReady';
+
+// a decoded 1,000 sat invoice that never expires during a test
+const payReq = {
+    getRequestAmount: 1000,
+    determineFormattedOriginalTimeUntilExpiry: jest.fn(),
+    isExpiredNow: () => false,
+    formattedOriginalTimeUntilExpiry: '1 hour',
+    payment_hash: 'ab'.repeat(32),
+    destination: '02' + 'cd'.repeat(32)
+};
+
+const renderView = async ({
+    implementation = 'embedded-lnd',
+    lightningBalance = 50000,
+    isLightningReadyToSend = jest.fn().mockResolvedValue(true),
+    getSettings = jest.fn(async () => ({ payments: {} }))
+}: {
+    implementation?: string;
+    lightningBalance?: number;
+    isLightningReadyToSend?: jest.Mock;
+    getSettings?: jest.Mock;
+} = {}) => {
+    const BalanceStore = {
+        lightningBalance,
+        getLightningBalance: jest.fn()
+    };
+    const result = await render(
+        <PaymentRequest
+            {...({
+                navigation: { addListener: jest.fn(() => jest.fn()) },
+                route: { params: {} },
+                BalanceStore,
+                SettingsStore: {
+                    implementation,
+                    settings: { payments: {} },
+                    getSettings
+                },
+                InvoicesStore: {
+                    pay_req: payReq,
+                    paymentRequest: 'lnbc10u1example'
+                },
+                NodeInfoStore: { nodeInfo: {}, isLightningReadyToSend },
+                TransactionsStore: { paymentInFlight: false },
+                LnurlPayStore: {},
+                UnitsStore: {},
+                ChannelsStore: {}
+            } as any)}
+        />
+    );
+    return { BalanceStore, ...result };
+};
+
+const payButton = () => screen.getByRole('button', { name: PAY });
+const flush = () =>
+    act(async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+    });
+
+describe('PaymentRequest mount', () => {
+    it('refreshes the lightning balance on mount without awaiting settings', async () => {
+        // never resolves: the refresh must start before settings load
+        const { BalanceStore } = await renderView({
+            getSettings: jest.fn(() => new Promise(() => {}))
+        });
+
+        expect(BalanceStore.getLightningBalance).toHaveBeenCalledWith(true);
+    });
+
+    it('is ready to pay at once on a remote node', async () => {
+        const isLightningReadyToSend = jest.fn();
+        await renderView({ implementation: 'lnd', isLightningReadyToSend });
+
+        expect(payButton()).toBeEnabled();
+        expect(screen.queryByText(GETTING_READY)).not.toBeOnTheScreen();
+        expect(isLightningReadyToSend).not.toHaveBeenCalled();
+    });
+});
+
+describe('PaymentRequest embedded LND readiness', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it('becomes ready once a stale zero balance is refreshed', async () => {
+        const isReady = jest.fn().mockResolvedValue(true);
+        const { BalanceStore } = await renderView({
+            lightningBalance: 0,
+            isLightningReadyToSend: isReady
+        });
+        await flush();
+
+        // a zero balance disables Pay and the loop waits without RPCs
+        expect(payButton()).toBeDisabled();
+        expect(isReady).not.toHaveBeenCalled();
+
+        // balance refresh lands after the loop started
+        BalanceStore.lightningBalance = 50000;
+        await flush();
+        await flush();
+
+        expect(isReady).toHaveBeenCalled();
+        expect(screen.queryByText(GETTING_READY)).not.toBeOnTheScreen();
+        expect(payButton()).toBeEnabled();
+    });
+
+    it('keeps polling when the readiness check rejects', async () => {
+        const isReady = jest
+            .fn()
+            .mockRejectedValueOnce(new Error('LND still starting'))
+            .mockResolvedValueOnce(true);
+        jest.spyOn(console, 'log').mockImplementation(() => {});
+
+        await renderView({ isLightningReadyToSend: isReady });
+        await flush();
+        await flush();
+
+        expect(isReady).toHaveBeenCalledTimes(2);
+        expect(payButton()).toBeEnabled();
+    });
+
+    it('stops polling when the view unmounts', async () => {
+        const isReady = jest.fn().mockResolvedValue(false);
+        const { unmount } = await renderView({
+            isLightningReadyToSend: isReady
+        });
+        await flush();
+        expect(isReady).toHaveBeenCalled();
+        expect(screen.getByText(GETTING_READY)).toBeOnTheScreen();
+        expect(payButton()).toBeDisabled();
+
+        await unmount();
+        const callsAtUnmount = isReady.mock.calls.length;
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(isReady).toHaveBeenCalledTimes(callsAtUnmount);
+    });
+});
